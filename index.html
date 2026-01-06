@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Canlı Maç İzleme</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.1/moment.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background-color: #1a202c;
+            color: #e2e8f0;
+        }
+        .bg-white {
+            background-color: #2d3748;
+        }
+        .text-blue-600 {
+            color: #63b3ed;
+        }
+        .text-gray-700 {
+            color: #e2e8f0;
+        }
+        .border {
+            border-color: #4a5568;
+        }
+        .bg-gray-50 {
+            background-color: #4a5568;
+        }
+        .hover\:bg-gray-100:hover {
+            background-color: #718096;
+        }
+        .status {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 4px;
+            text-align: center;
+        }
+        .loading {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .stream-loading {
+            background-color: #1a202c;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 18px;
+        }
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body class="p-4">
+    <div class="max-w-4xl mx-auto">
+        <div class="rounded-lg shadow-lg p-6 mb-6">
+            <h1 class="text-2xl font-bold mb-4 text-center">Canlı Maç İzleme</h1>
+            
+            <div class="mb-4">
+                <div id="loading" class="text-center">Maç programı yükleniyor...</div>
+                <div id="status" class="status" style="display: none;"></div>
+                <div id="lastUpdate" class="text-center text-sm mt-2"></div>
+            </div>
+
+            <div class="mb-4">
+                <input type="text" id="searchInput" placeholder="Maç veya takım ara..." 
+                       class="w-full p-2 border rounded-lg bg-gray-700 text-white">
+            </div>
+
+            <div class="mb-4">
+                <label class="block text-sm font-bold mb-2">Tarih Seçin:</label>
+                <select id="dateSelect" class="w-full p-2 border rounded-lg mb-4 bg-gray-700 text-white">
+                    <option value="all">Tüm Tarihler</option>
+                </select>
+            </div>
+
+            <div class="mb-6">
+                <label class="block text-sm font-bold mb-2">Maç Seçin:</label>
+                <select id="matchSelect" class="w-full p-2 border rounded-lg mb-2 bg-gray-700 text-white">
+                    <option value="">Maç Seçin</option>
+                </select>
+                
+                <div id="alternativeLinks" class="mt-2 space-y-2"></div>
+            </div>
+
+            <div id="streamContainer" class="hidden">
+                <div class="mb-2">
+                    <div id="selectedMatchInfo" class="text-center text-lg font-bold p-2 bg-gray-700 rounded"></div>
+                </div>
+                
+                <div id="streamLoading" class="stream-loading hidden">
+                    <div class="text-center">
+                        <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-2"></div>
+                        <div>Yayın yükleniyor...</div>
+                        <div class="text-sm text-gray-400 mt-2">Lütfen bekleyiniz</div>
+                    </div>
+                </div>
+                
+                <div class="aspect-w-16 aspect-h-9">
+                    <iframe 
+                        id="streamFrame" 
+                        src="" 
+                        class="w-full h-[600px] border-0" 
+                        allowfullscreen
+                        allow="autoplay; encrypted-media"
+                        referrerpolicy="no-referrer"
+                        sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                        scrolling="no"
+                    ></iframe>
+                </div>
+                
+                <div class="mt-4 flex flex-col sm:flex-row items-center justify-between gap-2">
+                    <button id="fullScreenButton" class="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">
+                        📺 Tam Ekran
+                    </button>
+                    <button id="refreshStream" class="p-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition">
+                        🔄 Yayını Yenile
+                    </button>
+                    <span class="text-sm text-gray-400 text-center">
+                        Eğer ses sorunu yaşıyorsanız, ekranın sol üst köşesindeki "CLICK HERE TO UNMUTE" yazısına birkaç kez tıklayınız.
+                    </span>
+                </div>
+                <div class="text-center text-xs text-gray-500 mt-2">
+                    BU PROGRAM Adil KESKİN TARAFINDAN GELİŞTİRİLMİŞTİR
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let allMatches = [];
+        let updateInterval;
+        let currentStreamUrl = '';
+
+        // Çalışan proxy servisleri (3. proxy başta)
+        const PROXY_SERVICES = [
+            'https://api.codetabs.com/v1/proxy?quest=', // ÇALIŞAN PROXY
+            'https://api.allorigins.win/raw?url=',
+            'https://corsproxy.io/?',
+            'https://cors-anywhere.herokuapp.com/'
+        ];
+
+        const MATCH_URL = 'https://sportsonline.gl/prog.txt';
+
+        const translateDay = (day) => {
+            const days = {
+                "MONDAY": "Pazartesi",
+                "TUESDAY": "Salı",
+                "WEDNESDAY": "Çarşamba",
+                "THURSDAY": "Perşembe",
+                "FRIDAY": "Cuma",
+                "SATURDAY": "Cumartesi",
+                "SUNDAY": "Pazar"
+            };
+            return days[day] || day;
+        };
+
+        const adjustTime = (time) => {
+            return moment(time, 'HH:mm').add(3, 'hours').format('HH:mm');
+        };
+
+        const showStatus = (message, type) => {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type}`;
+            statusDiv.style.display = 'block';
+        };
+
+        const fetchWithProxy = async (proxyIndex = 0) => {
+            if (proxyIndex >= PROXY_SERVICES.length) {
+                throw new Error('Tüm proxy servisleri başarısız');
+            }
+            
+            const proxyUrl = PROXY_SERVICES[proxyIndex];
+            
+            try {
+                showStatus(`Proxy ${proxyIndex + 1}/${PROXY_SERVICES.length} deneniyor...`, 'loading');
+                
+                const response = await fetch(proxyUrl + encodeURIComponent(MATCH_URL), {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'text/plain',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP hatası: ${response.status}`);
+                }
+                
+                const data = await response.text();
+                
+                if (!data || data.length < 10) {
+                    throw new Error('Boş veya geçersiz veri');
+                }
+                
+                return data;
+                
+            } catch (error) {
+                console.log(`Proxy ${proxyIndex + 1} başarısız:`, error.message);
+                return await fetchWithProxy(proxyIndex + 1);
+            }
+        };
+
+        const groupMatchesByDate = (matches) => {
+            const groups = {};
+            matches.forEach(match => {
+                const date = match.date || 'Bugün';
+                if (!groups[date]) {
+                    groups[date] = [];
+                }
+                groups[date].push(match);
+            });
+            return groups;
+        };
+
+        const updateDateSelect = (groupedMatches) => {
+            const dateSelect = document.getElementById('dateSelect');
+            dateSelect.innerHTML = '<option value="all">Tüm Tarihler</option>';
+            
+            Object.keys(groupedMatches).forEach(date => {
+                const option = document.createElement('option');
+                option.value = date;
+                option.textContent = translateDay(date);
+                dateSelect.appendChild(option);
+            });
+        };
+
+        const showAlternativeLinks = (matchTeams) => {
+            const altLinksDiv = document.getElementById('alternativeLinks');
+            altLinksDiv.innerHTML = '';
+
+            const alternatives = allMatches.filter(m => m.teams === matchTeams);
+            
+            if (alternatives.length > 1) {
+                const title = document.createElement('div');
+                title.className = 'font-bold text-sm mb-2 text-white';
+                title.textContent = 'Alternatif Yayınlar:';
+                altLinksDiv.appendChild(title);
+
+                alternatives.forEach((alt, index) => {
+                    const btn = document.createElement('button');
+                    btn.className = 'block w-full text-left p-2 text-sm bg-gray-700 hover:bg-gray-600 rounded mb-1 text-white transition';
+                    btn.textContent = `📺 Kanal ${index + 1} (${alt.link.split('/').pop().replace('.php', '')})`;
+                    btn.onclick = () => {
+                        loadStream(alt.link, alt.teams);
+                    };
+                    altLinksDiv.appendChild(btn);
+                });
+            }
+        };
+
+        const updateMatchList = (matches) => {
+            const select = document.getElementById('matchSelect');
+            const searchInput = document.getElementById('searchInput').value.toLowerCase();
+            const dateSelect = document.getElementById('dateSelect').value;
+            
+            select.innerHTML = '<option value="">Maç Seçin</option>';
+
+            let filteredMatches = matches;
+            
+            if (dateSelect !== 'all') {
+                filteredMatches = matches.filter(m => (m.date || 'Bugün') === dateSelect);
+            }
+
+            if (searchInput) {
+                filteredMatches = filteredMatches.filter(m => 
+                    m.teams.toLowerCase().includes(searchInput) || 
+                    m.time.includes(searchInput)
+                );
+            }
+
+            filteredMatches.sort((a, b) => {
+                const timeA = moment(a.time, 'HH:mm');
+                const timeB = moment(b.time, 'HH:mm');
+                return timeA - timeB;
+            });
+
+            const addedMatches = new Set();
+            filteredMatches.forEach(match => {
+                if (!addedMatches.has(match.teams)) {
+                    const option = document.createElement('option');
+                    option.value = JSON.stringify(match);
+                    option.textContent = `${adjustTime(match.time)} - ${match.teams}`;
+                    select.appendChild(option);
+                    addedMatches.add(match.teams);
+                }
+            });
+        };
+
+        const loadStream = (streamUrl, matchInfo) => {
+            const streamContainer = document.getElementById('streamContainer');
+            const streamFrame = document.getElementById('streamFrame');
+            const streamLoading = document.getElementById('streamLoading');
+            const selectedMatchInfo = document.getElementById('selectedMatchInfo');
+            
+            currentStreamUrl = streamUrl;
+            
+            // Bilgiyi göster
+            selectedMatchInfo.textContent = matchInfo;
+            
+            // Yükleniyor göster
+            streamLoading.classList.remove('hidden');
+            streamFrame.classList.add('hidden');
+            
+            // Stream container'ı göster
+            streamContainer.classList.remove('hidden');
+            
+            // Iframe'i yükle
+            streamFrame.src = streamUrl;
+            
+            // Iframe yüklendikten sonra
+            streamFrame.onload = () => {
+                setTimeout(() => {
+                    streamLoading.classList.add('hidden');
+                    streamFrame.classList.remove('hidden');
+                }, 2000);
+            };
+            
+            // Hata durumu
+            streamFrame.onerror = () => {
+                streamLoading.innerHTML = `
+                    <div class="text-center">
+                        <div class="text-red-500 text-4xl mb-2">❌</div>
+                        <div>Yayın yüklenirken hata oluştu</div>
+                        <button onclick="refreshCurrentStream()" class="mt-2 p-2 bg-blue-600 text-white rounded">
+                            Tekrar Dene
+                        </button>
+                    </div>
+                `;
+            };
+        };
+
+        const refreshCurrentStream = () => {
+            if (currentStreamUrl) {
+                const streamFrame = document.getElementById('streamFrame');
+                const streamLoading = document.getElementById('streamLoading');
+                const selectedMatchInfo = document.getElementById('selectedMatchInfo');
+                
+                streamLoading.classList.remove('hidden');
+                streamFrame.classList.add('hidden');
+                
+                // Rastgele parametre ekleyerek cache'i bypass et
+                const randomParam = `?refresh=${Date.now()}`;
+                streamFrame.src = currentStreamUrl + randomParam;
+                
+                setTimeout(() => {
+                    streamLoading.classList.add('hidden');
+                    streamFrame.classList.remove('hidden');
+                }, 2000);
+            }
+        };
+
+        const loadMatches = async () => {
+            const loading = document.getElementById('loading');
+            const lastUpdate = document.getElementById('lastUpdate');
+
+            try {
+                // Çalışan proxy ile veriyi al
+                const text = await fetchWithProxy();
+                
+                const lines = text.split('\n');
+                allMatches = [];
+                let currentDate = 'Bugün';
+
+                lines.forEach(line => {
+                    if (line.includes('MONDAY') || line.includes('TUESDAY') || 
+                        line.includes('WEDNESDAY') || line.includes('THURSDAY') || 
+                        line.includes('FRIDAY') || line.includes('SATURDAY') || 
+                        line.includes('SUNDAY')) {
+                        currentDate = line.trim();
+                        return;
+                    }
+
+                    const matchPattern = /(\d{2}:\d{2})\s+(.*?)\s+\|\s+(https:\/\/.*?\.php)/;
+                    const match = line.match(matchPattern);
+                    
+                    if (match) {
+                        allMatches.push({
+                            time: match[1],
+                            teams: match[2].trim(),
+                            link: match[3],
+                            date: currentDate
+                        });
+                    }
+                });
+
+                loading.style.display = 'none';
+                document.getElementById('status').style.display = 'none';
+                lastUpdate.textContent = `Son güncelleme: ${moment().add(3, 'hours').format('HH:mm:ss')}`;
+
+                const groupedMatches = groupMatchesByDate(allMatches);
+                updateDateSelect(groupedMatches);
+                updateMatchList(allMatches);
+
+            } catch (error) {
+                loading.style.display = 'none';
+                showStatus('Maç programı yüklenirken hata oluştu. Lütfen sayfayı yenileyin.', 'error');
+                console.error('Hata:', error);
+            }
+        };
+
+        // Event Listeners
+        document.getElementById('matchSelect').addEventListener('change', function() {
+            if (this.value) {
+                const match = JSON.parse(this.value);
+                loadStream(match.link, `${adjustTime(match.time)} - ${match.teams}`);
+                showAlternativeLinks(match.teams);
+            } else {
+                document.getElementById('streamContainer').classList.add('hidden');
+                document.getElementById('alternativeLinks').innerHTML = '';
+                currentStreamUrl = '';
+            }
+        });
+
+        document.getElementById('searchInput').addEventListener('input', () => {
+            updateMatchList(allMatches);
+        });
+
+        document.getElementById('dateSelect').addEventListener('change', () => {
+            updateMatchList(allMatches);
+        });
+
+        document.getElementById('fullScreenButton').addEventListener('click', () => {
+            const iframe = document.getElementById('streamFrame');
+            if (iframe.requestFullscreen) {
+                iframe.requestFullscreen();
+            } else if (iframe.mozRequestFullScreen) {
+                iframe.mozRequestFullScreen();
+            } else if (iframe.webkitRequestFullscreen) {
+                iframe.webkitRequestFullscreen();
+            } else if (iframe.msRequestFullscreen) {
+                iframe.msRequestFullscreen();
+            }
+        });
+
+        document.getElementById('refreshStream').addEventListener('click', refreshCurrentStream);
+
+        // Global function for error recovery
+        window.refreshCurrentStream = refreshCurrentStream;
+
+        window.addEventListener('load', () => {
+            loadMatches();
+            updateInterval = setInterval(loadMatches, 5 * 60 * 1000);
+        });
+
+        window.addEventListener('unload', () => {
+            if (updateInterval) {
+                clearInterval(updateInterval);
+            }
+        });
+    </script>
+</body>
+</html>
